@@ -16,12 +16,13 @@ env:
   REGISTRY: ghcr.io
   IMAGE_NAME: terraform-safeguard
 
+permissions:
+  contents: read
+  packages: write
+
 jobs:
   check-releases:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      packages: write
     outputs:
       new-versions: ${{ steps.check-versions.outputs.new-versions }}
       new-versions-json: ${{ steps.check-versions.outputs.new-versions-json }}
