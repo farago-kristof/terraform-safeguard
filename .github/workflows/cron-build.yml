@@ -24,6 +24,7 @@ jobs:
       packages: write
     outputs:
       new-versions: ${{ steps.check-versions.outputs.new-versions }}
+      new-versions-json: ${{ steps.check-versions.outputs.new-versions-json }}
       has-new: ${{ steps.check-versions.outputs.has-new }}
 
     steps:
@@ -70,6 +71,14 @@ jobs:
         
         echo "new-versions=$NEW_VERSIONS" >> $GITHUB_OUTPUT
         
+        # Convert to JSON array for matrix
+        if [ -n "$NEW_VERSIONS" ]; then
+          NEW_VERSIONS_JSON=$(echo "$NEW_VERSIONS" | jq -R 'split(",") | map(select(length > 0))')
+          echo "new-versions-json=$NEW_VERSIONS_JSON" >> $GITHUB_OUTPUT
+        else
+          echo "new-versions-json=[]" >> $GITHUB_OUTPUT
+        fi
+        
         if [ -n "$NEW_VERSIONS" ] || [ "${{ github.event.inputs.force_check }}" = "true" ]; then
           echo "has-new=true" >> $GITHUB_OUTPUT
           echo "New versions found: $NEW_VERSIONS"
@@ -85,7 +94,7 @@ jobs:
     if: needs.check-releases.outputs.has-new == 'true'
     strategy:
       matrix:
-        terraform_version: ${{ fromJson(format('["{0}"]', join(split(needs.check-releases.outputs.new-versions, ','), '","'))) }}
+        terraform_version: ${{ fromJson(needs.check-releases.outputs.new-versions-json) }}
     uses: ./.github/workflows/build-image.yml
     with:
       input_tag: hashicorp/terraform:${{ matrix.terraform_version }}
@@ -121,4 +130,3 @@ jobs:
         done
         echo "" >> $GITHUB_STEP_SUMMARY
         echo "Build status: ${{ needs.build-new-versions.result }}" >> $GITHUB_STEP_SUMMARY
-
