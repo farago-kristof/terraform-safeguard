@@ -1,0 +1,76 @@
+name: Build Single Docker Image
+
+on:
+  workflow_call:
+    inputs:
+      input_tag:
+        description: 'Base Terraform image tag (e.g., hashicorp/terraform:1.5.0)'
+        required: true
+        type: string
+      output_tag:
+        description: 'Output image tag (comma-separated for multiple tags)'
+        required: true
+        type: string
+      push:
+        description: 'Whether to push the built image'
+        required: false
+        type: boolean
+        default: false
+  workflow_dispatch:
+    inputs:
+      input_tag:
+        description: 'Base Terraform image tag (e.g., hashicorp/terraform:1.5.0)'
+        required: true
+        type: string
+      output_tag:
+        description: 'Output image tag (comma-separated for multiple tags)'
+        required: true
+        type: string
+      push:
+        description: 'Whether to push the built image'
+        required: false
+        type: boolean
+        default: false
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Log in to Container Registry
+      if: inputs.push
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.12'
+
+    - name: Make build script executable
+      run: chmod +x scripts/build_image.py
+
+    - name: Build Docker image
+      run: |
+        python3 scripts/build_image.py \
+          ${{ inputs.input_tag }} \
+          -t "${{ inputs.output_tag }}" \
+          ${{ inputs.push && '--push' || '' }}
+
+    - name: Output image info
+      run: |
+        echo "Built image(s): ${{ inputs.output_tag }}"
+        echo "Base image: ${{ inputs.input_tag }}"
+        echo "Pushed: ${{ inputs.push }}"

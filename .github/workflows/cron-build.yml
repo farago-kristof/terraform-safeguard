@@ -1,0 +1,124 @@
+name: Cron Build Terraform Safeguard Images
+
+on:
+  schedule:
+    # Check every 6 hours for new releases
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      force_check:
+        description: 'Force check even if no new versions'
+        required: false
+        type: boolean
+        default: false
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: terraform-safeguard
+
+jobs:
+  check-releases:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    outputs:
+      new-versions: ${{ steps.check-versions.outputs.new-versions }}
+      has-new: ${{ steps.check-versions.outputs.has-new }}
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Check for new Terraform versions
+      id: check-versions
+      run: |
+        # Get current built versions from our registry
+        echo "Fetching existing built versions..."
+        EXISTING_VERSIONS=""
+        if gh api --paginate "/user/packages/container/${{ env.IMAGE_NAME }}/versions" 2>/dev/null | jq -r '.[].metadata.container.tags[]?' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' > /tmp/existing_versions.txt; then
+          EXISTING_VERSIONS=$(cat /tmp/existing_versions.txt | sort -u | tr '\n' ',' | sed 's/,$//')
+          echo "Existing versions: $EXISTING_VERSIONS"
+        else
+          echo "No existing versions found or error fetching versions"
+        fi
+        
+        # Get latest Terraform versions from Docker Hub
+        echo "Fetching latest Terraform versions from Docker Hub..."
+        LATEST_VERSIONS=$(curl -s "https://registry.hub.docker.com/v2/repositories/hashicorp/terraform/tags?page_size=50" | \
+          jq -r '.results[] | select(.name | test("^[0-9]+\\.[0-9]+\\.[0-9]+$")) | .name' | \
+          sort -V | tail -10 | tr '\n' ',' | sed 's/,$//')
+        
+        echo "Latest available versions: $LATEST_VERSIONS"
+        
+        # Find new versions
+        NEW_VERSIONS=""
+        IFS=',' read -ra LATEST_ARRAY <<< "$LATEST_VERSIONS"
+        IFS=',' read -ra EXISTING_ARRAY <<< "$EXISTING_VERSIONS"
+        
+        for version in "${LATEST_ARRAY[@]}"; do
+          if [[ ! " ${EXISTING_ARRAY[@]} " =~ " ${version} " ]]; then
+            if [ -z "$NEW_VERSIONS" ]; then
+              NEW_VERSIONS="$version"
+            else
+              NEW_VERSIONS="$NEW_VERSIONS,$version"
+            fi
+          fi
+        done
+        
+        echo "new-versions=$NEW_VERSIONS" >> $GITHUB_OUTPUT
+        
+        if [ -n "$NEW_VERSIONS" ] || [ "${{ github.event.inputs.force_check }}" = "true" ]; then
+          echo "has-new=true" >> $GITHUB_OUTPUT
+          echo "New versions found: $NEW_VERSIONS"
+        else
+          echo "has-new=false" >> $GITHUB_OUTPUT
+          echo "No new versions found"
+        fi
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build-new-versions:
+    needs: check-releases
+    if: needs.check-releases.outputs.has-new == 'true'
+    strategy:
+      matrix:
+        terraform_version: ${{ fromJson(format('["{0}"]', join(split(needs.check-releases.outputs.new-versions, ','), '","'))) }}
+    uses: ./.github/workflows/build-image.yml
+    with:
+      input_tag: hashicorp/terraform:${{ matrix.terraform_version }}
+      output_tag: ${{ github.repository_owner }}/terraform-safeguard:${{ matrix.terraform_version }},${{ github.repository_owner }}/terraform-safeguard:tf-${{ matrix.terraform_version }}
+      push: true
+    secrets: inherit
+
+  build-latest:
+    needs: [check-releases, build-new-versions]
+    if: needs.check-releases.outputs.has-new == 'true'
+    uses: ./.github/workflows/build-image.yml
+    with:
+      input_tag: hashicorp/terraform:latest
+      output_tag: ${{ github.repository_owner }}/terraform-safeguard:latest
+      push: true
+    secrets: inherit
+
+  notify:
+    needs: [check-releases, build-new-versions]
+    runs-on: ubuntu-latest
+    if: always() && needs.check-releases.outputs.has-new == 'true'
+    steps:
+    - name: Create release summary
+      run: |
+        echo "## New Terraform Safeguard Images Built" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "Built images for new Terraform versions:" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        IFS=',' read -ra VERSIONS <<< "${{ needs.check-releases.outputs.new-versions }}"
+        for version in "${VERSIONS[@]}"; do
+          echo "- \`${{ github.repository_owner }}/terraform-safeguard:$version\`" >> $GITHUB_STEP_SUMMARY
+          echo "- \`${{ github.repository_owner }}/terraform-safeguard:tf-$version\`" >> $GITHUB_STEP_SUMMARY
+        done
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "Build status: ${{ needs.build-new-versions.result }}" >> $GITHUB_STEP_SUMMARY
+
