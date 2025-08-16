@@ -40,7 +40,7 @@ jobs:
         # Get current built versions from our registry
         echo "Fetching existing built versions..."
         EXISTING_VERSIONS=""
-        if gh api --paginate "/user/packages/container/${{ env.IMAGE_NAME }}/versions" 2>/dev/null | jq -r '.[].metadata.container.tags[]?' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' > /tmp/existing_versions.txt; then
+        if gh api --paginate "/user/packages/container/${{ env.IMAGE_NAME }}/versions" 2>/dev/null | jq -r '.[] | select(.metadata.container.tags != null) | .metadata.container.tags[]' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' > /tmp/existing_versions.txt; then
           EXISTING_VERSIONS=$(cat /tmp/existing_versions.txt | sort -u | tr '\n' ',' | sed 's/,$//')
           echo "Existing versions: $EXISTING_VERSIONS"
         else
@@ -72,9 +72,17 @@ jobs:
         
         echo "new-versions=$NEW_VERSIONS" >> $GITHUB_OUTPUT
         
-        # Convert to JSON array for matrix
+        # Convert to JSON array for matrix - fix the format
         if [ -n "$NEW_VERSIONS" ]; then
-          NEW_VERSIONS_JSON=$(echo "$NEW_VERSIONS" | jq -R 'split(",") | map(select(length > 0))')
+          NEW_VERSIONS_JSON="["
+          IFS=',' read -ra VERSION_ARRAY <<< "$NEW_VERSIONS"
+          for i in "${!VERSION_ARRAY[@]}"; do
+            if [ $i -gt 0 ]; then
+              NEW_VERSIONS_JSON="${NEW_VERSIONS_JSON},"
+            fi
+            NEW_VERSIONS_JSON="${NEW_VERSIONS_JSON}\"${VERSION_ARRAY[i]}\""
+          done
+          NEW_VERSIONS_JSON="${NEW_VERSIONS_JSON}]"
           echo "new-versions-json=$NEW_VERSIONS_JSON" >> $GITHUB_OUTPUT
         else
           echo "new-versions-json=[]" >> $GITHUB_OUTPUT
